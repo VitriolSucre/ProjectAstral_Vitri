@@ -1,0 +1,77 @@
+## Interface: 30300
+## Title: ProjectAstral
+## Notes: Astral addon hub - Skill Tree, Token Store, Raid Lockouts, Mythic Raid, Reagent Bank, Transmog.
+## Version: 3.1
+## OptionalDeps: BuildSaver
+## SavedVariables: ProjectAstralAT_DB, ProjectAstralSettings, ProjectAstralBuilds, ProjectAstralActionBars, ProjectAstralVault, AIO_sv, AIO_sv_Addons, TransmogrificationOptions, CollectedAppearances, ProjectAstralGemBuilds, ProjectAstralBossLoadouts, ProjectAstralWorldMapPins, ProjectAstralTalentBuilds
+## SavedVariablesPerCharacter: ProjectAstralLevelReward, ProjectAstralPersonalLoot, AIO_sv_char
+
+# ── Project Astral core ─────────────────────────────────────────────
+Core.lua
+Theme.lua
+BuildSaverSupport.lua
+AstralBlizzardUI.lua
+ItemCache.lua
+MainMenu.lua
+MinimapButton.lua
+AstralTreeData.lua
+Skilltree.lua
+Paragon.lua
+AstralStats.lua
+Builds.lua
+AstralGems.lua
+GemBuilds.lua
+TalentBuilds.lua
+GemStash.lua
+PrestigeStore.lua
+WorldChat.lua
+Settings.lua
+TokenTracker.lua
+TextAppearance.lua
+TalentReset.lua
+EquipmentSets.lua
+Loadouts.lua
+ClassTalents.lua
+MountSafe.lua
+MountJournal.lua
+MountViewer.lua
+ActionBarSaver.lua
+ClientFixes.lua
+
+# ── AIO client (RPC layer, Rochet2) ─────────────────────────────────
+AIO_Client\Dep_LibWindow-1.1\LibStub.lua
+AIO_Client\Dep_LibWindow-1.1\LibWindow-1.1\LibWindow-1.1.lua
+AIO_Client\Dep_Smallfolk\smallfolk.lua
+AIO_Client\lualzw-zeros\lualzw.lua
+AIO_Client\queue.lua
+AIO_Client\AIO.lua
+
+# ── AIO consumers (must load after AIO_Client\AIO.lua) ──────────────
+StarterZonePicker.lua
+CubeOfDestiny.lua
+Prestige.lua
+Challenges.lua
+AstralTree.lua
+Collections.lua
+GemFusion.lua
+AstralDisenchant.lua
+DisenchantTab.lua
+ReagentBank.lua
+LockoutReset.lua
+GreatVault.lua
+Leaderboard.lua
+DailyCallboard.lua
+LevelReward.lua
+MythicUpgrade.lua
+MythicPlusHUD.lua
+MythicPlusWarden.lua
+
+# ── Transmogrification ──────────────────────────────────────────────
+Transmogrification\embeds.xml
+Transmogrification\Locale\enUS.lua
+Transmogrification\transmogrification_options.lua
+Transmogrification\transmogrification.lua
+Transmogrification\transmogrification_frame.xml
+
+# ── Vibrant Text Override (MUST BE LAST) ────────────────────────────
+OVERRIDE_FONTS.lua
