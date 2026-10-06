@@ -5,6 +5,13 @@ Newest first. The general changelog is `.CHANGELOG.md`.
 
 ---
 
+## 2026-10-07 — Talent Builds keep action bars
+
+### Talent Builds (`TalentBuilds.lua`)
+- Saving a build also saves the spells, items and macros on action slots 1-120; loading it (directly or through a Loadout) puts them back 1 s after the last talent, and loading an already active build puts them back too. Items need to be in your bags or equipped and macros are found by name; the ones that can't be placed are listed in chat
+- Each row's info line shows "N bar actions", or "No action bars saved" in orange for builds saved before this; a new "Save bars" button (orange label when nothing is saved) stores the current layout in that build, only while that build is active
+- Leveling build: each spell the character learns is placed in its saved slot when that slot is empty, with a chat line; spells learned in combat are placed when combat ends
+
 ## 2026-10-06 — Disenchant tab, hub micro button
 
 ### Hub micro button (`MinimapButton.lua`)

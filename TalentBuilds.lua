@@ -5,7 +5,8 @@ local UI = PA.UI
 -- Talent Builds tab (Builds section): save the class talents you have spent under a
 -- name, load them again (the game's talent reset, then one point at a time, each
 -- waiting for the client to accept it), share them as text, and pick one build per
--- character that gets one point on every level-up. Ported from the standalone
+-- character that gets one point on every level-up. A build also keeps where its
+-- spells sit on the action bars (see "action bar layout" below). Ported from the standalone
 -- TalentBuildManager addon; builds are now account-wide (ProjectAstralTalentBuilds)
 -- and the list shows the ones for your class. The "Builds" button in the Blizzard
 -- talent window opens this tab.
@@ -218,12 +219,132 @@ local function ShowProgress(state, text, done)
     bar.counter:SetText(HEX_MUTED .. completed .. " / " .. total .. "|r")
 end
 
+-- ── action bar layout saved with a build ───────────────────────────
+-- build.bars (optional, added after the first release): [action slot] = entry for
+-- every spell, item and macro on action slots 1-120 when the build was saved:
+--   spell { name =, rank = }  (no type field)
+--   item  { type = "item", id =, name = }   needs the item in bags or equipped
+--   macro { type = "macro", name = }        found again by name
+-- Builds saved before have none: the list flags them and their "Save bars" button
+-- adds the current layout. Loading a build puts its actions back in those slots; the
+-- leveling build puts each newly learned spell in its slot if that slot is empty.
+local BAR_SLOTS = 120   -- every action bar page and the side/bottom bars (121+ is vehicle/possess)
+
+local function CaptureBars()
+    local bars, n = {}, 0
+    for slot = 1, BAR_SLOTS do
+        local typ, id = GetActionInfo(slot)
+        local entry
+        if typ == "spell" and id and id > 0 then
+            local name, rank = GetSpellName(id, "spell")
+            if name then entry = { name = name, rank = (rank and rank ~= "") and rank or nil } end
+        elseif typ == "item" and id then
+            entry = { type = "item", id = id, name = (GetItemInfo(id)) }
+        elseif typ == "macro" and id then
+            local name = GetMacroInfo(id)
+            if name then entry = { type = "macro", name = name } end
+        end
+        if entry then bars[slot] = entry; n = n + 1 end
+    end
+    return bars, n
+end
+
+local function BarCount(b)
+    local n = 0
+    for _ in pairs(b.bars or {}) do n = n + 1 end
+    return n
+end
+
+-- spell name (and name|rank) -> spellbook index; later entries are higher ranks
+local function SpellbookIndex()
+    local book = {}
+    for tab = 1, GetNumSpellTabs() do
+        local _, _, offset, count = GetSpellTabInfo(tab)
+        for i = offset + 1, offset + count do
+            local name, rank = GetSpellName(i, "spell")
+            if name then
+                book[name] = i
+                if rank and rank ~= "" then book[name .. "|" .. rank] = i end
+            end
+        end
+    end
+    return book
+end
+
+-- is this slot already holding exactly this entry?
+local function SlotHolds(slot, entry)
+    local typ, id = GetActionInfo(slot)
+    if not typ then return false end
+    if entry.type == "item" then return typ == "item" and id == entry.id end
+    if entry.type == "macro" then return typ == "macro" and GetMacroInfo(id) == entry.name end
+    return typ == "spell" and (GetSpellName(id, "spell")) == entry.name
+end
+
+-- puts an entry on the cursor; false when the character can't (unknown spell, item
+-- not in bags, macro deleted)
+local function PickupEntry(entry, book)
+    if entry.type == "item" then
+        PickupItem(entry.id)
+    elseif entry.type == "macro" then
+        local index = GetMacroIndexByName(entry.name)
+        if not index or index == 0 then return false end
+        PickupMacro(index)
+    else
+        local index = book[entry.name .. "|" .. (entry.rank or "")] or book[entry.name]
+        if not index then return false end
+        PickupSpell(index, "spell")
+    end
+    return CursorHasItem() or GetCursorInfo() ~= nil
+end
+
+-- puts saved actions in their slots; `only` (optional set of spell names) limits it
+-- to those spells, `onlyEmpty` leaves slots that already hold something. Returns how
+-- many were placed and the names of those that couldn't be (item/macro missing).
+local function ApplyBars(bars, onlyEmpty, only)
+    if not bars or InCombatLockdown() then return 0, {} end
+    local book, placed, missing = SpellbookIndex(), 0, {}
+    ClearCursor()
+    for slot, entry in pairs(bars) do
+        local wanted = not only or (not entry.type and only[entry.name])
+        local typ = GetActionInfo(slot)
+        if wanted and not SlotHolds(slot, entry) and not (onlyEmpty and typ) then
+            if PickupEntry(entry, book) then
+                PlaceAction(slot)
+                placed = placed + 1
+            elseif entry.type then
+                missing[#missing + 1] = entry.name or ("item " .. tostring(entry.id))
+            end
+            ClearCursor()   -- drops whatever the slot held before
+        end
+    end
+    return placed, missing
+end
+
+-- after a load the last talent's spell reaches the spellbook a moment later
+local barTimer = CreateFrame("Frame")
+local function ApplyBarsSoon(build)
+    barTimer.left, barTimer.build = 1.0, build
+    barTimer:SetScript("OnUpdate", function(self, dt)
+        self.left = self.left - dt
+        if self.left > 0 then return end
+        self:SetScript("OnUpdate", nil)
+        local n, missing = ApplyBars(self.build.bars, false)
+        if n > 0 then
+            ChatInfo(n .. " action bar action" .. (n == 1 and "" or "s") .. " placed from '" .. self.build.name .. "'.")
+        end
+        if #missing > 0 then
+            ChatInfo("Not placed (not in your bags or no such macro): " .. table.concat(missing, ", ") .. ".")
+        end
+    end)
+end
+
 local function FinishLoad(message, ok)
     local state = loadState
     loadState = nil
     runner:SetScript("OnUpdate", nil)
     if state then
         ShowProgress(state, (ok and HEX_GOOD or HEX_WARN) .. message .. "|r", ok and "ok" or "fail")
+        if ok and state.build.bars then ApplyBarsSoon(state.build) end
     end
     ChatInfo(message)
     if RefreshList then RefreshList() end
@@ -293,7 +414,17 @@ local function LoadBuild(build)
     if not LearnTalent then SetStatus("This client does not expose the talent allocation API.", HEX_BAD); return end
     local valid, reason = ValidateBuild(build)
     if not valid then SetStatus(reason, HEX_BAD); return end
-    if BuildMatchesCurrent(build) then SetStatus("'" .. build.name .. "' is already active.", HEX_GOOD); return end
+    if BuildMatchesCurrent(build) then
+        -- talents already match: still put its spells back on the bars
+        local n, missing = ApplyBars(build.bars, false)
+        SetStatus("'" .. build.name .. "' is already active" .. (n > 0 and ("; " .. n .. " action bar action"
+            .. (n == 1 and "" or "s") .. " put back") or "")
+            .. (#missing > 0 and (", " .. #missing .. " missing (see chat).") or "."), HEX_GOOD)
+        if #missing > 0 then
+            ChatInfo("Not placed (not in your bags or no such macro): " .. table.concat(missing, ", ") .. ".")
+        end
+        return
+    end
 
     local group = GetActiveGroup()
     if GetTalentTotal() == 0 then StartAllocations(build, group); RefreshList(); return end
@@ -422,11 +553,14 @@ local function SaveCurrent()
     local className = UnitClass("player")
     build.className, build.savedBy = className, UnitName("player")
     build.savedAt, build.date = time(), date("%Y-%m-%d")
+    local bars, spells = CaptureBars()
+    build.bars = bars
     if not existing then table.insert(Builds(), build) end
     host.nameBox:Clear()
     host.nameBox.edit:ClearFocus()
     local _, total = TreePoints(build)
-    SetStatus(string.format("%s build '%s' (%d points).", existing and "Updated" or "Saved", name, total), HEX_GOOD)
+    SetStatus(string.format("%s build '%s' (%d points, %d action bar actions).",
+        existing and "Updated" or "Saved", name, total, spells), HEX_GOOD)
     RefreshList()
 end
 
@@ -443,6 +577,19 @@ local function DeleteBuild(b)
             return
         end
     end
+end
+
+-- adds the current bar layout to a build saved without one (or refreshes it); only
+-- while that build is the active one, so the bars match its talents
+local function SaveBars(b)
+    if not BuildMatchesCurrent(b) then
+        SetStatus("Load '" .. b.name .. "' first, place its spells on your bars, then click Save bars.", HEX_WARN)
+        return
+    end
+    local bars, spells = CaptureBars()
+    b.bars = bars
+    SetStatus(string.format("Saved the positions of %d action bar actions in '%s'.", spells, b.name), HEX_GOOD)
+    RefreshList()
 end
 
 local function ToggleLeveling(b)
@@ -636,14 +783,26 @@ local function CreateRow(parent, i)
         GameTooltip:Show()
     end)
 
+    r.bars = UI.MakeButton(r, "Save bars", { w = 84, h = 24, variant = "secondary",
+        onClick = function() if r.build then SaveBars(r.build) end end })
+    r.bars:SetPoint("RIGHT", r.level, "LEFT", -10, 0)
+    r.bars:HookScript("OnEnter", function(self)
+        GameTooltip:SetOwner(self, "ANCHOR_TOP")
+        GameTooltip:SetText("Save action bars", 1, 1, 1)
+        GameTooltip:AddLine("Saves where this build's spells, items and macros are on your action bars. Load the build, arrange your bars, then click here.",
+            0.8, 0.8, 0.85, true)
+        GameTooltip:Show()
+    end)
+    r.bars:HookScript("OnLeave", function() GameTooltip:Hide() end)
+
     r.name = r:CreateFontString(nil, "OVERLAY"); UI.SetTextFont(r.name, 14)
     r.name:SetPoint("BOTTOMLEFT", r.iconFrame, "RIGHT", 10, 2)
-    r.name:SetPoint("RIGHT", r.level, "LEFT", -10, 0)
+    r.name:SetPoint("RIGHT", r.bars, "LEFT", -10, 0)
     r.name:SetJustifyH("LEFT"); r.name:SetWordWrap(false)
 
     r.sub = r:CreateFontString(nil, "OVERLAY"); UI.SetTextFont(r.sub, 11)
     r.sub:SetPoint("TOPLEFT", r.iconFrame, "RIGHT", 10, -3)
-    r.sub:SetPoint("RIGHT", r.level, "LEFT", -10, 0)
+    r.sub:SetPoint("RIGHT", r.bars, "LEFT", -10, 0)
     r.sub:SetJustifyH("LEFT"); r.sub:SetWordWrap(false)
 
     r:Hide()
@@ -674,9 +833,13 @@ RefreshList = function()
             local spread = {}
             for tab, n in ipairs(parts) do spread[tab] = (tab == main) and (HEX_GOLD .. n .. "|r") or tostring(n) end
             local mainName = b.trees[main] and b.trees[main].name or ""
+            -- builds saved before bar layouts existed say so, and keep their Save bars button lit
+            local barsText = b.bars and (HEX_DIM .. "  ·  " .. BarCount(b) .. " bar actions|r")
+                or (HEX_WARN .. "  ·  No action bars saved|r")
             r.sub:SetText((active and (HEX_GOLD .. "Active|r" .. HEX_DIM .. "  ·  |r") or "")
                 .. HEX_MUTED .. table.concat(spread, HEX_DIM .. "/|r" .. HEX_MUTED) .. "  " .. mainName .. "|r"
-                .. HEX_DIM .. "  ·  " .. (b.savedBy or "?") .. "  ·  " .. (b.date or "") .. "|r")
+                .. barsText .. HEX_DIM .. "  ·  " .. (b.savedBy or "?") .. "  ·  " .. (b.date or "") .. "|r")
+            r.bars:SetLabel(b.bars and "Save bars" or (HEX_WARN .. "Save bars|r"))
             local _, icon = GetTalentTabInfo(main)
             r.iconFrame:SetTexture(icon or "Interface\\Icons\\INV_Misc_Book_09")
             r.iconFrame:SetQuality(4)
@@ -920,6 +1083,42 @@ events:SetScript("OnEvent", function(_, event, arg1)
         UpdateTalentButton()
         if host and host:IsVisible() then RefreshList() end
     end
+end)
+
+-- leveling build: each spell the character learns (trainer or talent point) goes to
+-- its saved slot when that slot is empty. Only spells that weren't known before are
+-- placed, so clearing a slot on purpose isn't undone by every spellbook refresh.
+local knownSpells   -- spell names known at the last SPELLS_CHANGED; nil until the first one
+local pendingBars   -- names learned in combat, placed when it ends
+local barEvents = CreateFrame("Frame")
+barEvents:RegisterEvent("SPELLS_CHANGED")
+barEvents:RegisterEvent("PLAYER_REGEN_ENABLED")
+barEvents:SetScript("OnEvent", function(_, event)
+    if event == "SPELLS_CHANGED" then
+        local now = {}
+        for name in pairs(SpellbookIndex()) do
+            if not name:find("|", 1, true) then now[name] = true end
+        end
+        local learned
+        if knownSpells then
+            for name in pairs(now) do
+                if not knownSpells[name] then learned = learned or {}; learned[name] = true end
+            end
+        end
+        knownSpells = now
+        if not learned then return end
+        pendingBars = pendingBars or {}
+        for name in pairs(learned) do pendingBars[name] = true end
+    end
+    if not pendingBars or InCombatLockdown() then return end
+    local build = LevelingBuild()
+    if build and build.bars then
+        local n = ApplyBars(build.bars, true, pendingBars)
+        if n > 0 then
+            ChatInfo(n .. " new spell" .. (n == 1 and "" or "s") .. " placed on your bars from '" .. build.name .. "'.")
+        end
+    end
+    pendingBars = nil
 end)
 
 local function ToggleTalentBuilds() OpenTab() end
